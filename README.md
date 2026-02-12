@@ -33,6 +33,7 @@ cog predict \
   -i images=@input.jpg \
   -i codeformer_fidelity=0.7 \
   -i runtime_profile=fast \
+  -i stability_mode=safe \
   -i background_enhance=true \
   -i face_upsample=true \
   -i upscale=2 \
@@ -48,12 +49,14 @@ cog predict \
 | `background_enhance` | bool | true | Enhance background with Real-ESRGAN |
 | `face_upsample` | bool | true | Upsample restored faces for high-resolution output |
 | `upscale` | int | 2 | Final upsampling scale of the image |
-| `output_format` | string | "png" | Output format: "png" or "jpg" |
-| `runtime_profile` | string | "baseline" | Runtime profile: "baseline", "fast", or "max_speed" |
+| `output_format` | string | "jpg" | Output format: "png" or "jpg" |
+| `runtime_profile` | string | "fast" | Runtime profile: "baseline", "fast", or "max_speed" |
+| `stability_mode` | string | "safe" | Execution mode: "safe" (recommended on Replicate) or "optimized" (highest throughput) |
 
 ## Output
 
 Returns a list of restored images corresponding to each input image.
+If any input fails to load/process, the prediction fails explicitly with a detailed error (no silent partial-success output).
 
 ## Benchmarking
 
@@ -70,6 +73,11 @@ The script auto-discovers `data/*.jpg` when `--images` is not provided and execu
 - `baseline`: original behavior with no additional speed-focused settings.
 - `fast`: enables mixed precision and batched face restoration.
 - `max_speed`: fastest profile; keeps batching and precision optimizations and skips face parsing during paste-back.
+
+### Stability Modes
+
+- `safe` (default): reliability-first mode for Replicate. Disables high-risk GPU runtime optimizations.
+- `optimized`: enables `torch.compile`, channels-last, and overlapping CUDA work for maximum throughput.
 
 ### Optimization Results (Current)
 

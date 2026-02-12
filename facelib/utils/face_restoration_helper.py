@@ -58,6 +58,8 @@ class FaceRestoreHelper(object):
                  template_3points=False,
                  pad_blur=False,
                  use_parse=False,
+                 det_half=True,
+                 compile_models=False,
                  device=None):
         self.template_3points = template_3points  # improve robustness
         self.upscale_factor = upscale_factor
@@ -103,18 +105,21 @@ class FaceRestoreHelper(object):
         else:
             self.device = device
 
-        # init face detection model (half precision on GPU for speed)
-        use_half = torch.cuda.is_available()
+        # init face detection model
+        use_half = torch.cuda.is_available() and det_half
         self.face_det = init_detection_model(det_model, half=use_half, device=self.device)
 
-        # init face parsing model
+        # init face parsing model only when needed
         self.use_parse = use_parse
-        self.face_parse = init_parsing_model(model_name='parsenet', device=self.device)
+        self.face_parse = None
+        if self.use_parse:
+            self.face_parse = init_parsing_model(model_name='parsenet', device=self.device)
 
-        # torch.compile detection and parsing models for faster inference
-        if torch.cuda.is_available():
+        # torch.compile models for optimized mode only
+        if compile_models and torch.cuda.is_available():
             self.face_det = torch.compile(self.face_det, mode="reduce-overhead")
-            self.face_parse = torch.compile(self.face_parse, mode="reduce-overhead")
+            if self.face_parse is not None:
+                self.face_parse = torch.compile(self.face_parse, mode="reduce-overhead")
 
     def set_upscale_factor(self, upscale_factor):
         self.upscale_factor = upscale_factor
@@ -323,7 +328,7 @@ class FaceRestoreHelper(object):
         
         # Batch face parsing: run ParseNet once on all faces instead of per-face
         parse_outputs = []
-        if self.use_parse and self.restored_faces:
+        if self.use_parse and self.face_parse is not None and self.restored_faces:
             parse_t0 = time.perf_counter()
             face_inputs = []
             for restored_face in self.restored_faces:
