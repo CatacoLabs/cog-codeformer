@@ -1,0 +1,92 @@
+{
+  "metadata": {
+    "image": "cog-cf-h100",
+    "num_images": 20,
+    "batch_size": 4,
+    "num_batches": 5,
+    "profiles": [
+      "baseline",
+      "fast",
+      "max_speed"
+    ],
+    "warmup": 3,
+    "repeats": 5,
+    "params": {
+      "codeformer_fidelity": 0.5,
+      "background_enhance": true,
+      "face_upsample": true,
+      "upscale": 2,
+      "output_format": "jpg"
+    },
+    "mode": "cog_serve_http",
+    "total_elapsed_s": 732.8
+  },
+  "results": {
+    "baseline": {
+      "round_totals": {
+        "num_samples": 5,
+        "avg_ms": 11046.11,
+        "p50_ms": 11090.73,
+        "p95_ms": 11134.78,
+        "p99_ms": 11141.75,
+        "min_ms": 10873.36,
+        "max_ms": 11143.49
+      },
+      "per_batch": {
+        "num_samples": 25,
+        "avg_ms": 2209.22,
+        "p50_ms": 2208.53,
+        "p95_ms": 2278.1,
+        "p99_ms": 2298.77,
+        "min_ms": 2126.82,
+        "max_ms": 2304.27
+      },
+      "per_image_avg_ms": 552.31,
+      "throughput_img_per_s": 1.811
+    },
+    "fast": {
+      "round_totals": {
+        "num_samples": 5,
+        "avg_ms": 8998.18,
+        "p50_ms": 9018.61,
+        "p95_ms": 9150.17,
+        "p99_ms": 9158.93,
+        "min_ms": 8819.88,
+        "max_ms": 9161.13
+      },
+      "per_batch": {
+        "num_samples": 25,
+        "avg_ms": 1799.64,
+        "p50_ms": 1807.88,
+        "p95_ms": 1865.87,
+        "p99_ms": 1869.96,
+        "min_ms": 1692.05,
+        "max_ms": 1871.07
+      },
+      "per_image_avg_ms": 449.91,
+      "throughput_img_per_s": 2.223
+    },
+    "max_speed": {
+      "round_totals": {
+        "num_samples": 5,
+        "avg_ms": 7009.95,
+        "p50_ms": 6999.93,
+        "p95_ms": 7046.11,
+        "p99_ms": 7046.31,
+        "min_ms": 6969.42,
+        "max_ms": 7046.36
+      },
+      "per_batch": {
+        "num_samples": 25,
+        "avg_ms": 1401.99,
+        "p50_ms": 1409.72,
+        "p95_ms": 1433.77,
+        "p99_ms": 1442.36,
+        "min_ms": 1336.21,
+        "max_ms": 1445.05
+      },
+      "per_image_avg_ms": 350.5,
+      "throughput_img_per_s": 2.853
+    }
+  }
+}

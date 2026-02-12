@@ -32,6 +32,7 @@ cog predict -i images=@photo1.jpg -i images=@photo2.jpg
 cog predict \
   -i images=@input.jpg \
   -i codeformer_fidelity=0.7 \
+  -i runtime_profile=fast \
   -i background_enhance=true \
   -i face_upsample=true \
   -i upscale=2 \
@@ -48,10 +49,51 @@ cog predict \
 | `face_upsample` | bool | true | Upsample restored faces for high-resolution output |
 | `upscale` | int | 2 | Final upsampling scale of the image |
 | `output_format` | string | "png" | Output format: "png" or "jpg" |
+| `runtime_profile` | string | "baseline" | Runtime profile: "baseline", "fast", or "max_speed" |
 
 ## Output
 
 Returns a list of restored images corresponding to each input image.
+
+## Benchmarking
+
+Use the benchmark runner to compare runtime profiles via repeated `cog predict` calls:
+
+```bash
+python benchmarks/run_bench.py --image-dir data --batch-size 4 --profiles baseline fast max_speed --repeats 3
+```
+
+The script auto-discovers `data/*.jpg` when `--images` is not provided and executes batched `cog predict` calls (default 4 images per request to match the predictor limit). It then saves per-profile latency percentiles and throughput.
+
+### Runtime Profiles
+
+- `baseline`: original behavior with no additional speed-focused settings.
+- `fast`: enables mixed precision and batched face restoration.
+- `max_speed`: fastest profile; keeps batching and precision optimizations and skips face parsing during paste-back.
+
+### Optimization Results (Current)
+
+Measured with `data/1.jpg` and `data/2.jpg`, `warmup=1`, `repeats=3`:
+
+| Profile | Avg Latency (ms) | P95 (ms) | Throughput (img/s) | Delta vs Baseline |
+|---------|------------------:|---------:|-------------------:|------------------:|
+| `baseline` | 13425.92 | 13559.31 | 0.14897 | - |
+| `fast` | 13250.94 | 13430.49 | 0.15093 | +1.30% |
+| `max_speed` | 12985.76 | 13080.51 | 0.15401 | +3.28% |
+
+Main takeaways:
+- End-to-end speedup is real but modest in `cog predict` mode.
+- Biggest gains came from face batching and mixed precision.
+- `max_speed` is currently the fastest profile.
+- `fast` is a middle-ground profile when you want speedups with more conservative quality behavior.
+
+### Full Dataset Benchmark (100 images)
+
+Run all images in `data/` (auto-discovered) with request chunking:
+
+```bash
+python benchmarks/run_bench.py --image-dir data --batch-size 4 --profiles baseline fast max_speed --warmup 1 --repeats 3 --output benchmarks/last_bench_100.json
+```
 
 ## Model Weights
 

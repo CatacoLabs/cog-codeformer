@@ -1,0 +1,46 @@
+{
+  "metadata": {
+    "image": "cog-codeformer",
+    "num_images": 20,
+    "batch_size": 4,
+    "num_batches": 5,
+    "profiles": [
+      "original"
+    ],
+    "warmup": 3,
+    "repeats": 5,
+    "params": {
+      "codeformer_fidelity": 0.5,
+      "background_enhance": true,
+      "face_upsample": true,
+      "upscale": 2,
+      "output_format": "jpg"
+    },
+    "mode": "cog_serve_http",
+    "total_elapsed_s": 190.25
+  },
+  "results": {
+    "original": {
+      "round_totals": {
+        "num_samples": 5,
+        "avg_ms": 23762.95,
+        "p50_ms": 23762.7,
+        "p95_ms": 24702.58,
+        "p99_ms": 24837.85,
+        "min_ms": 22586.14,
+        "max_ms": 24871.67
+      },
+      "per_batch": {
+        "num_samples": 25,
+        "avg_ms": 4752.59,
+        "p50_ms": 4685.02,
+        "p95_ms": 5327.04,
+        "p99_ms": 5626.09,
+        "min_ms": 4490.46,
+        "max_ms": 5699.53
+      },
+      "per_image_avg_ms": 1188.15,
+      "throughput_img_per_s": 0.842
+    }
+  }
+}
