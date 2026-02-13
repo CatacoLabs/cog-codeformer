@@ -8,7 +8,7 @@ CodeFormer is a state-of-the-art face restoration algorithm that can:
 - Restore old/degraded face photos
 - Enhance low-quality face images
 - Fix AI-generated face artifacts
-- Upscale face images with background enhancement
+- Improve face quality without global image upscaling
 
 The model uses a discrete codebook prior learned from high-quality faces combined with a transformer architecture to achieve natural and high-fidelity face restoration.
 
@@ -33,11 +33,8 @@ cog predict \
   -i images=@input.jpg \
   -i codeformer_fidelity=0.7 \
   -i runtime_profile=fast \
-  -i stability_mode=safe \
-  -i background_enhance=true \
-  -i face_upsample=true \
-  -i upscale=2 \
-  -i output_format=png
+  -i stability_mode=optimized \
+  -i compile_backend=eager
 ```
 
 ## Input Parameters
@@ -46,17 +43,23 @@ cog predict \
 |-----------|------|---------|-------------|
 | `images` | List[Path] | required | Input image(s) - up to 4 images |
 | `codeformer_fidelity` | float | 0.5 | Balance between quality (0) and fidelity (1). Lower values produce higher quality but may alter facial features. |
-| `background_enhance` | bool | true | Enhance background with Real-ESRGAN |
-| `face_upsample` | bool | true | Upsample restored faces for high-resolution output |
-| `upscale` | int | 2 | Final upsampling scale of the image |
-| `output_format` | string | "jpg" | Output format: "png" or "jpg" |
-| `runtime_profile` | string | "fast" | Runtime profile: "baseline", "fast", or "max_speed" |
+| `runtime_profile` | string | "baseline" | Runtime profile: "baseline", "fast", or "max_speed" |
 | `stability_mode` | string | "safe" | Execution mode: "safe" (recommended on Replicate) or "optimized" (highest throughput) |
+| `compile_backend` | string | "eager" | `torch.compile` backend used only when `stability_mode=optimized` |
 
 ## Output
 
 Returns a list of restored images corresponding to each input image.
 If any input fails to load/process, the prediction fails explicitly with a detailed error (no silent partial-success output).
+Outputs are always JPG. Background enhancement is disabled and upscale is fixed to `1`.
+
+### `cog serve` HTTP Request
+
+```bash
+curl http://localhost:8080/predictions -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"images":["https://.../input.jpg"],"runtime_profile":"baseline","stability_mode":"safe","compile_backend":"eager"}}'
+```
 
 ## Benchmarking
 
@@ -77,7 +80,7 @@ The script auto-discovers `data/*.jpg` when `--images` is not provided and execu
 ### Stability Modes
 
 - `safe` (default): reliability-first mode for Replicate. Disables high-risk GPU runtime optimizations.
-- `optimized`: enables `torch.compile`, channels-last, and overlapping CUDA work for maximum throughput.
+- `optimized`: enables `torch.compile` and channels-last for maximum throughput.
 
 ### Optimization Results (Current)
 
@@ -105,17 +108,15 @@ python benchmarks/run_bench.py --image-dir data --batch-size 4 --profiles baseli
 
 ## Model Weights
 
-Model weights are automatically downloaded on first run (~610MB total):
+Model weights are automatically downloaded on first run:
 - CodeFormer face restoration model
 - RetinaFace face detection model
 - ParseNet face parsing model
-- Real-ESRGAN background upsampler
 
 ## References
 
 - [CodeFormer Paper](https://arxiv.org/abs/2206.11253) - "Towards Robust Blind Face Restoration with Codebook Lookup Transformer"
 - [Official Repository](https://github.com/sczhou/CodeFormer)
-- [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) - Used for background enhancement
 
 ## Citation
 

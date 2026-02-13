@@ -1,10 +1,10 @@
+import faulthandler
 import os
 import tempfile
 import time
 import traceback
-import faulthandler
 from pathlib import Path as FSPath
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import cv2
 import torch
@@ -12,10 +12,8 @@ from cog import BasePredictor, Input, Path as CogPath
 from torch.hub import download_url_to_file
 from torchvision.transforms.functional import normalize
 
-from basicsr.archs.rrdbnet_arch import RRDBNet
-from basicsr.utils import imwrite, img2tensor, tensor2img
+from basicsr.utils import img2tensor, tensor2img
 from basicsr.utils.img_util import tensor2img_fast
-from basicsr.utils.realesrgan_utils import RealESRGANer
 from basicsr.utils.registry import ARCH_REGISTRY
 from facelib.utils.face_restoration_helper import FaceRestoreHelper
 
@@ -24,7 +22,6 @@ faulthandler.enable()
 # Model weight URLs - downloaded during setup if not present
 WEIGHT_URLS = {
     "weights/CodeFormer/codeformer.pth": "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth",
-    "weights/realesrgan/RealESRGAN_x2plus.pth": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
     "weights/facelib/detection_Resnet50_Final.pth": "https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth",
     "weights/facelib/parsing_parsenet.pth": "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/parsing_parsenet.pth",
 }
@@ -34,7 +31,7 @@ class Predictor(BasePredictor):
     def _log(self, message: str) -> None:
         print(message, flush=True)
 
-    def _download_weights(self):
+    def _download_weights(self) -> None:
         """Download model weights if they don't exist and verify they are readable."""
         for weight_path, url in WEIGHT_URLS.items():
             if not os.path.exists(weight_path):
@@ -63,7 +60,7 @@ class Predictor(BasePredictor):
             )
         return checkpoint["params_ema"]
 
-    def setup(self):
+    def setup(self) -> None:
         """Load model resources once at startup."""
         self._log("[setup] starting setup")
         self._download_weights()
@@ -76,15 +73,7 @@ class Predictor(BasePredictor):
         torch.backends.cudnn.benchmark = True
         self._log(f"[setup] cuda_available={self.cuda_available}, device={self.device}")
 
-        self.amp_dtype = (
-            torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        )
-
-        self.upsampler_tiled = set_realesrgan(tile=400)
-        self.upsampler_notile = set_realesrgan(
-            tile=0,
-            share_model=self.upsampler_tiled.model if self.upsampler_tiled else None,
-        )
+        self.amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
         self.net = ARCH_REGISTRY.get("CodeFormer")(
             dim_embd=512,
@@ -111,7 +100,7 @@ class Predictor(BasePredictor):
         self.compile_backend = "none"
         self._log("[setup] setup complete")
 
-    def _ensure_optimized_runtime(self, compile_backend: str = "inductor"):
+    def _ensure_optimized_runtime(self, compile_backend: str = "inductor") -> None:
         if self.optimized_runtime_enabled:
             self._log("[opt] optimized runtime already enabled")
             return
@@ -127,12 +116,6 @@ class Predictor(BasePredictor):
 
         # channels_last can improve throughput on H100, but only enable in optimized mode.
         self.net = self.net.to(memory_format=torch.channels_last)
-        self.upsampler_tiled.model = self.upsampler_tiled.model.to(
-            memory_format=torch.channels_last
-        )
-        self.upsampler_notile.model = self.upsampler_notile.model.to(
-            memory_format=torch.channels_last
-        )
 
         if compile_backend != "none":
             try:
@@ -140,20 +123,6 @@ class Predictor(BasePredictor):
                 if compile_backend == "inductor":
                     compile_kwargs["mode"] = "max-autotune"
                 self.net_compiled = torch.compile(self.net, **compile_kwargs)
-
-                compile_kwargs_bg = {"backend": compile_backend}
-                if compile_backend == "inductor":
-                    compile_kwargs_bg["mode"] = "max-autotune"
-                self.upsampler_notile.model = torch.compile(
-                    self.upsampler_notile.model, **compile_kwargs_bg
-                )
-
-                compile_kwargs_tile = {"backend": compile_backend}
-                if compile_backend == "inductor":
-                    compile_kwargs_tile["mode"] = "reduce-overhead"
-                self.upsampler_tiled.model = torch.compile(
-                    self.upsampler_tiled.model, **compile_kwargs_tile
-                )
                 self._log(f"[opt] enabled torch.compile backend={compile_backend}")
             except Exception as error:
                 # Keep model functional even if compile fails.
@@ -174,27 +143,21 @@ class Predictor(BasePredictor):
             return self.net_compiled
         return self.net
 
-    def _maybe_sync_cuda(self):
-        if self.cuda_available:
-            torch.cuda.synchronize()
-
     def _to_device(self, tensor: torch.Tensor) -> torch.Tensor:
         if self.stability_mode == "optimized" and self.optimized_runtime_enabled:
             return tensor.to(self.device, memory_format=torch.channels_last)
         return tensor.to(self.device)
 
-    def _build_or_get_face_helper(
-        self, upscale: int, output_format: str, use_parse: bool, use_optimized: bool
-    ) -> FaceRestoreHelper:
-        config = (upscale, output_format, use_parse, use_optimized)
+    def _build_or_get_face_helper(self, use_parse: bool, use_optimized: bool) -> FaceRestoreHelper:
+        config = (1, "jpg", use_parse, use_optimized)
         if self.face_helper is None or self.face_helper_config != config:
             det_half = use_optimized
             self.face_helper = FaceRestoreHelper(
-                upscale,
+                1,
                 face_size=512,
                 crop_ratio=(1, 1),
                 det_model="retinaface_resnet50",
-                save_ext=output_format,
+                save_ext="jpg",
                 use_parse=use_parse,
                 det_half=det_half,
                 compile_models=False,
@@ -205,8 +168,8 @@ class Predictor(BasePredictor):
                 f"[face_helper] created use_parse={use_parse}, det_half={det_half}, compile_models=False"
             )
         else:
-            self.face_helper.set_upscale_factor(upscale)
-            self.face_helper.save_ext = output_format
+            self.face_helper.set_upscale_factor(1)
+            self.face_helper.save_ext = "jpg"
             self.face_helper.use_parse = use_parse
             self.face_helper.clean_all()
             self._log("[face_helper] reused existing helper")
@@ -250,10 +213,6 @@ class Predictor(BasePredictor):
         self,
         image: FSPath,
         codeformer_fidelity: float,
-        background_enhance: bool,
-        face_upsample: bool,
-        upscale: int,
-        output_format: str,
         output_path: FSPath,
         runtime_profile: str,
     ) -> None:
@@ -267,20 +226,11 @@ class Predictor(BasePredictor):
         use_batch_faces = use_optimized and runtime_profile in {"fast", "max_speed"}
 
         self.face_helper = self._build_or_get_face_helper(
-            upscale=upscale,
-            output_format=output_format,
             use_parse=use_parse,
             use_optimized=use_optimized,
         )
         self.face_helper.clean_all()
 
-        if use_optimized and runtime_profile != "baseline":
-            upsampler = self.upsampler_notile
-        else:
-            upsampler = self.upsampler_tiled
-
-        bg_upsampler = upsampler if background_enhance else None
-        face_upsampler = upsampler if face_upsample else None
         stage_times_ms: Dict[str, float] = {}
 
         self._log("[stage:start] read_image")
@@ -301,7 +251,6 @@ class Predictor(BasePredictor):
             num_det_faces = self.face_helper.get_face_landmarks_5(
                 only_center_face=only_center_face, resize=640, eye_dist_threshold=5
             )
-            self._maybe_sync_cuda()
             stage_times_ms["detect_ms"] = (time.perf_counter() - t0) * 1000
             self._log(
                 f"[stage:done] face_landmarks ms={stage_times_ms['detect_ms']:.2f}, detect={num_det_faces}"
@@ -312,26 +261,6 @@ class Predictor(BasePredictor):
             self.face_helper.align_warp_face()
             stage_times_ms["align_ms"] = (time.perf_counter() - t0) * 1000
             self._log(f"[stage:done] align_warp_face ms={stage_times_ms['align_ms']:.2f}")
-
-        use_streams = (
-            use_optimized
-            and runtime_profile in {"fast", "max_speed"}
-            and self.cuda_available
-            and bg_upsampler is not None
-            and not has_aligned
-        )
-
-        bg_img = None
-        bg_stream = None
-        t0_bg = None
-
-        if use_streams:
-            self._log("[stage:start] bg_upsample_async")
-            bg_stream = torch.cuda.Stream()
-            t0_bg = time.perf_counter()
-            with torch.cuda.stream(bg_stream):
-                bg_img = bg_upsampler.enhance(img, outscale=upscale)[0]
-            self._log("[stage:done] bg_upsample_async launch")
 
         self._log("[stage:start] codeformer_restore")
         t0 = time.perf_counter()
@@ -345,9 +274,7 @@ class Predictor(BasePredictor):
                 self.face_helper.add_restored_face(restored_face.astype("uint8"))
         else:
             for cropped_face in self.face_helper.cropped_faces:
-                cropped_face_t = img2tensor(
-                    cropped_face / 255.0, bgr2rgb=True, float32=True
-                )
+                cropped_face_t = img2tensor(cropped_face / 255.0, bgr2rgb=True, float32=True)
                 normalize(cropped_face_t, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)
                 cropped_face_t = self._to_device(cropped_face_t.unsqueeze(0))
 
@@ -359,56 +286,26 @@ class Predictor(BasePredictor):
                             dtype=self.amp_dtype,
                             enabled=use_amp and self.cuda_available,
                         ):
-                            output = net(
-                                cropped_face_t, w=codeformer_fidelity, adain=True
-                            )[0]
-                        restored_face = tensor2img(
-                            output, rgb2bgr=True, min_max=(-1, 1)
-                        )
+                            output = net(cropped_face_t, w=codeformer_fidelity, adain=True)[0]
+                        restored_face = tensor2img(output, rgb2bgr=True, min_max=(-1, 1))
                     del output
                 except Exception as error:
                     self._log(f"Failed inference for CodeFormer: {error}")
-                    restored_face = tensor2img(
-                        cropped_face_t, rgb2bgr=True, min_max=(-1, 1)
-                    )
+                    restored_face = tensor2img(cropped_face_t, rgb2bgr=True, min_max=(-1, 1))
 
                 self.face_helper.add_restored_face(restored_face.astype("uint8"))
-        self._maybe_sync_cuda()
+
         stage_times_ms["codeformer_ms"] = (time.perf_counter() - t0) * 1000
         self._log(f"[stage:done] codeformer_restore ms={stage_times_ms['codeformer_ms']:.2f}")
 
         if not has_aligned:
-            if use_streams and bg_stream is not None and t0_bg is not None:
-                self._log("[stage:start] bg_upsample_async_sync")
-                bg_stream.synchronize()
-                stage_times_ms["bg_upsample_ms"] = (time.perf_counter() - t0_bg) * 1000
-                self._log(
-                    f"[stage:done] bg_upsample_async_sync ms={stage_times_ms['bg_upsample_ms']:.2f}"
-                )
-            elif bg_upsampler is not None:
-                self._log("[stage:start] bg_upsample")
-                t0 = time.perf_counter()
-                bg_img = bg_upsampler.enhance(img, outscale=upscale)[0]
-                self._maybe_sync_cuda()
-                stage_times_ms["bg_upsample_ms"] = (time.perf_counter() - t0) * 1000
-                self._log(f"[stage:done] bg_upsample ms={stage_times_ms['bg_upsample_ms']:.2f}")
-            else:
-                stage_times_ms["bg_upsample_ms"] = 0.0
-
             self._log("[stage:start] inverse_affine_and_paste")
             t0 = time.perf_counter()
             self.face_helper.get_inverse_affine(None)
-            if face_upsample and face_upsampler is not None:
-                restored_img = self.face_helper.paste_faces_to_input_image(
-                    upsample_img=bg_img,
-                    draw_box=draw_box,
-                    face_upsampler=face_upsampler,
-                )
-            else:
-                restored_img = self.face_helper.paste_faces_to_input_image(
-                    upsample_img=bg_img, draw_box=draw_box
-                )
-            self._maybe_sync_cuda()
+            restored_img = self.face_helper.paste_faces_to_input_image(
+                upsample_img=None,
+                draw_box=draw_box,
+            )
             stage_times_ms["paste_ms"] = (time.perf_counter() - t0) * 1000
             stage_times_ms["parse_ms"] = getattr(self.face_helper, "parse_time_ms", 0.0)
             self._log(
@@ -417,12 +314,9 @@ class Predictor(BasePredictor):
 
         self._log("[stage:start] write_output")
         t0 = time.perf_counter()
-        if output_format == "jpg":
-            ok = cv2.imwrite(str(output_path), restored_img, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            if not ok:
-                raise RuntimeError(f"Failed to write JPG output: {output_path}")
-        else:
-            imwrite(restored_img, str(output_path))
+        ok = cv2.imwrite(str(output_path), restored_img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ok:
+            raise RuntimeError(f"Failed to write JPG output: {output_path}")
 
         if not output_path.exists() or output_path.stat().st_size == 0:
             raise RuntimeError(f"Output file missing or empty: {output_path}")
@@ -441,22 +335,6 @@ class Predictor(BasePredictor):
             ge=0,
             le=1,
             description="Balance the quality (lower number) and fidelity (higher number).",
-        ),
-        background_enhance: bool = Input(
-            description="Enhance background image with Real-ESRGAN", default=True
-        ),
-        face_upsample: bool = Input(
-            description="Upsample restored faces for high-resolution AI-created images",
-            default=True,
-        ),
-        upscale: int = Input(
-            description="The final upsampling scale of the image",
-            default=2,
-        ),
-        output_format: str = Input(
-            description="Output image format",
-            default="jpg",
-            choices=["png", "jpg"],
         ),
         runtime_profile: str = Input(
             description="Runtime profile",
@@ -503,16 +381,12 @@ class Predictor(BasePredictor):
         all_stats = []
 
         for idx, img_path in enumerate(input_paths, start=1):
-            out_path = out_dir / f"output_{idx}.{output_format}"
+            out_path = out_dir / f"output_{idx}.jpg"
             self._log(f"Processing image {idx}/{len(input_paths)}: {img_path.name}")
             try:
                 self._process_single_image(
                     img_path,
                     codeformer_fidelity,
-                    background_enhance,
-                    face_upsample,
-                    upscale,
-                    output_format,
                     out_path,
                     runtime_profile,
                 )
@@ -539,43 +413,3 @@ class Predictor(BasePredictor):
             raise RuntimeError("No output images generated")
 
         return output_paths
-
-
-def imread(img_path):
-    img = cv2.imread(img_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    return img
-
-
-def set_realesrgan(tile=400, share_model: Optional[torch.nn.Module] = None):
-    if not torch.cuda.is_available():
-        import warnings
-
-        warnings.warn(
-            "The unoptimized RealESRGAN is slow on CPU. We do not use it. "
-            "If you really want to use it, please modify the corresponding codes.",
-            category=RuntimeWarning,
-        )
-        return None
-
-    model = RRDBNet(
-        num_in_ch=3,
-        num_out_ch=3,
-        num_feat=64,
-        num_block=23,
-        num_grow_ch=32,
-        scale=2,
-    )
-    upsampler = RealESRGANer(
-        scale=2,
-        model_path="./weights/realesrgan/RealESRGAN_x2plus.pth",
-        model=model,
-        tile=tile,
-        tile_pad=40 if tile > 0 else 0,
-        pre_pad=0,
-        half=True,
-    )
-    # Share model weights if provided (avoids double load + double VRAM)
-    if share_model is not None:
-        upsampler.model = share_model
-    return upsampler
