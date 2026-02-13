@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+import time
 import torch
 from torchvision.transforms.functional import normalize
 
@@ -57,6 +58,8 @@ class FaceRestoreHelper(object):
                  template_3points=False,
                  pad_blur=False,
                  use_parse=False,
+                 det_half=True,
+                 compile_models=False,
                  device=None):
         self.template_3points = template_3points  # improve robustness
         self.upscale_factor = upscale_factor
@@ -95,6 +98,7 @@ class FaceRestoreHelper(object):
         self.cropped_faces = []
         self.restored_faces = []
         self.pad_input_imgs = []
+        self.parse_time_ms = 0.0
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -102,11 +106,20 @@ class FaceRestoreHelper(object):
             self.device = device
 
         # init face detection model
-        self.face_det = init_detection_model(det_model, half=False, device=self.device)
+        use_half = torch.cuda.is_available() and det_half
+        self.face_det = init_detection_model(det_model, half=use_half, device=self.device)
 
-        # init face parsing model
+        # init face parsing model only when needed
         self.use_parse = use_parse
-        self.face_parse = init_parsing_model(model_name='parsenet', device=self.device)
+        self.face_parse = None
+        if self.use_parse:
+            self.face_parse = init_parsing_model(model_name='parsenet', device=self.device)
+
+        # torch.compile models for optimized mode only
+        if compile_models and torch.cuda.is_available():
+            self.face_det = torch.compile(self.face_det, mode="reduce-overhead")
+            if self.face_parse is not None:
+                self.face_parse = torch.compile(self.face_parse, mode="reduce-overhead")
 
     def set_upscale_factor(self, upscale_factor):
         self.upscale_factor = upscale_factor
@@ -147,7 +160,7 @@ class FaceRestoreHelper(object):
             interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
             input_img = cv2.resize(self.input_img, (w, h), interpolation=interp)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             bboxes = self.face_det.detect_faces(input_img)
 
         if bboxes is None or bboxes.shape[0] == 0:
@@ -313,8 +326,41 @@ class FaceRestoreHelper(object):
         assert len(self.restored_faces) == len(
             self.inverse_affine_matrices), ('length of restored_faces and affine_matrices are different.')
         
+        # Batch face parsing: run ParseNet once on all faces instead of per-face
+        parse_outputs = []
+        if self.use_parse and self.face_parse is not None and self.restored_faces:
+            parse_t0 = time.perf_counter()
+            face_inputs = []
+            for restored_face in self.restored_faces:
+                face_input = cv2.resize(restored_face, (512, 512), interpolation=cv2.INTER_LINEAR)
+                face_input = img2tensor(face_input.astype('float32') / 255., bgr2rgb=True, float32=True)
+                normalize(face_input, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)
+                face_inputs.append(face_input)
+            batched_input = torch.stack(face_inputs, dim=0).to(self.device)
+            with torch.inference_mode():
+                batched_out = self.face_parse(batched_input)[0]
+            batched_out = batched_out.argmax(dim=1).cpu().numpy()
+            for i in range(batched_out.shape[0]):
+                out = batched_out[i]
+                parse_mask = np.zeros(out.shape)
+                MASK_COLORMAP = [0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 0, 0, 0]
+                for idx, color in enumerate(MASK_COLORMAP):
+                    parse_mask[out == idx] = color
+                parse_mask = cv2.GaussianBlur(parse_mask, (101, 101), 11)
+                parse_mask = cv2.GaussianBlur(parse_mask, (101, 101), 11)
+                thres = 10
+                parse_mask[:thres, :] = 0
+                parse_mask[-thres:, :] = 0
+                parse_mask[:, :thres] = 0
+                parse_mask[:, -thres:] = 0
+                parse_mask = parse_mask / 255.
+                parse_outputs.append(parse_mask)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            self.parse_time_ms += (time.perf_counter() - parse_t0) * 1000.0
+
         inv_mask_borders = []
-        for restored_face, inverse_affine in zip(self.restored_faces, self.inverse_affine_matrices):
+        for face_idx, (restored_face, inverse_affine) in enumerate(zip(self.restored_faces, self.inverse_affine_matrices)):
             if face_upsampler is not None:
                 restored_face = face_upsampler.enhance(restored_face, outscale=self.upscale_factor)[0]
                 inverse_affine /= self.upscale_factor
@@ -329,33 +375,6 @@ class FaceRestoreHelper(object):
                 inverse_affine[:, 2] += extra_offset
                 face_size = self.face_size
             inv_restored = cv2.warpAffine(restored_face, inverse_affine, (w_up, h_up))
-
-            # if draw_box or not self.use_parse:  # use square parse maps
-            #     mask = np.ones(face_size, dtype=np.float32)
-            #     inv_mask = cv2.warpAffine(mask, inverse_affine, (w_up, h_up))
-            #     # remove the black borders
-            #     inv_mask_erosion = cv2.erode(
-            #         inv_mask, np.ones((int(2 * self.upscale_factor), int(2 * self.upscale_factor)), np.uint8))
-            #     pasted_face = inv_mask_erosion[:, :, None] * inv_restored
-            #     total_face_area = np.sum(inv_mask_erosion)  # // 3
-            #     # add border
-            #     if draw_box:
-            #         h, w = face_size
-            #         mask_border = np.ones((h, w, 3), dtype=np.float32)
-            #         border = int(1400/np.sqrt(total_face_area))
-            #         mask_border[border:h-border, border:w-border,:] = 0
-            #         inv_mask_border = cv2.warpAffine(mask_border, inverse_affine, (w_up, h_up))
-            #         inv_mask_borders.append(inv_mask_border)
-            #     if not self.use_parse:
-            #         # compute the fusion edge based on the area of face
-            #         w_edge = int(total_face_area**0.5) // 20
-            #         erosion_radius = w_edge * 2
-            #         inv_mask_center = cv2.erode(inv_mask_erosion, np.ones((erosion_radius, erosion_radius), np.uint8))
-            #         blur_size = w_edge * 2
-            #         inv_soft_mask = cv2.GaussianBlur(inv_mask_center, (blur_size + 1, blur_size + 1), 0)
-            #         if len(upsample_img.shape) == 2:  # upsample_img is gray image
-            #             upsample_img = upsample_img[:, :, None]
-            #         inv_soft_mask = inv_soft_mask[:, :, None]
 
             # always use square mask
             mask = np.ones(face_size, dtype=np.float32)
@@ -383,36 +402,12 @@ class FaceRestoreHelper(object):
                 upsample_img = upsample_img[:, :, None]
             inv_soft_mask = inv_soft_mask[:, :, None]
 
-            # parse mask
-            if self.use_parse:
-                # inference
-                face_input = cv2.resize(restored_face, (512, 512), interpolation=cv2.INTER_LINEAR)
-                face_input = img2tensor(face_input.astype('float32') / 255., bgr2rgb=True, float32=True)
-                normalize(face_input, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)
-                face_input = torch.unsqueeze(face_input, 0).to(self.device)
-                with torch.no_grad():
-                    out = self.face_parse(face_input)[0]
-                out = out.argmax(dim=1).squeeze().cpu().numpy()
-
-                parse_mask = np.zeros(out.shape)
-                MASK_COLORMAP = [0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 0, 0, 0]
-                for idx, color in enumerate(MASK_COLORMAP):
-                    parse_mask[out == idx] = color
-                #  blur the mask
-                parse_mask = cv2.GaussianBlur(parse_mask, (101, 101), 11)
-                parse_mask = cv2.GaussianBlur(parse_mask, (101, 101), 11)
-                # remove the black borders
-                thres = 10
-                parse_mask[:thres, :] = 0
-                parse_mask[-thres:, :] = 0
-                parse_mask[:, :thres] = 0
-                parse_mask[:, -thres:] = 0
-                parse_mask = parse_mask / 255.
-
+            # Apply pre-computed parse mask
+            if self.use_parse and face_idx < len(parse_outputs):
+                parse_mask = parse_outputs[face_idx]
                 parse_mask = cv2.resize(parse_mask, face_size)
                 parse_mask = cv2.warpAffine(parse_mask, inverse_affine, (w_up, h_up), flags=3)
                 inv_soft_parse_mask = parse_mask[:, :, None]
-                # pasted_face = inv_restored
                 fuse_mask = (inv_soft_parse_mask<inv_soft_mask).astype('int')
                 inv_soft_mask = inv_soft_parse_mask*fuse_mask + inv_soft_mask*(1-fuse_mask)
 
@@ -453,3 +448,4 @@ class FaceRestoreHelper(object):
         self.inverse_affine_matrices = []
         self.det_faces = []
         self.pad_input_imgs = []
+        self.parse_time_ms = 0.0

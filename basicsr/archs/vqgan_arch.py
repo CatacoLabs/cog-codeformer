@@ -15,7 +15,6 @@ def normalize(in_channels):
     return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
     
 
-@torch.jit.script
 def swish(x):
     return x*torch.sigmoid(x)
 
@@ -207,20 +206,15 @@ class AttnBlock(nn.Module):
         k = self.k(h_)
         v = self.v(h_)
 
-        # compute attention
+        # Use F.scaled_dot_product_attention (Flash Attention / SDPA)
         b, c, h, w = q.shape
-        q = q.reshape(b, c, h*w)
-        q = q.permute(0, 2, 1)   
-        k = k.reshape(b, c, h*w)
-        w_ = torch.bmm(q, k) 
-        w_ = w_ * (int(c)**(-0.5))
-        w_ = F.softmax(w_, dim=2)
+        # Reshape to (B, N, C) where N = H*W for SDPA
+        q = q.reshape(b, c, h * w).permute(0, 2, 1)  # (B, N, C)
+        k = k.reshape(b, c, h * w).permute(0, 2, 1)  # (B, N, C)
+        v = v.reshape(b, c, h * w).permute(0, 2, 1)  # (B, N, C)
 
-        # attend to values
-        v = v.reshape(b, c, h*w)
-        w_ = w_.permute(0, 2, 1) 
-        h_ = torch.bmm(v, w_)
-        h_ = h_.reshape(b, c, h, w)
+        h_ = F.scaled_dot_product_attention(q, k, v)  # (B, N, C)
+        h_ = h_.permute(0, 2, 1).reshape(b, c, h, w)  # (B, C, H, W)
 
         h_ = self.proj_out(h_)
 

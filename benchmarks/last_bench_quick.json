@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "images": [
+      "data/1.jpg",
+      "data/2.jpg"
+    ],
+    "profiles": [
+      "baseline",
+      "fast",
+      "max_speed"
+    ],
+    "warmup": 0,
+    "repeats": 1,
+    "mode": "cog_predict_subprocess",
+    "elapsed_s": 40.03276991844177
+  },
+  "results": {
+    "baseline": {
+      "summary": {
+        "num_samples": 1,
+        "avg_total_ms": 13363.06862100173,
+        "p50_total_ms": 13363.06862100173,
+        "p95_total_ms": 13363.06862100173,
+        "p99_total_ms": 13363.06862100173,
+        "throughput_req_s": 0.07483311119336582,
+        "throughput_img_s": 0.14966622238673163
+      },
+      "failures": []
+    },
+    "fast": {
+      "summary": {
+        "num_samples": 1,
+        "avg_total_ms": 13609.287628998572,
+        "p50_total_ms": 13609.287628998572,
+        "p95_total_ms": 13609.287628998572,
+        "p99_total_ms": 13609.287628998572,
+        "throughput_req_s": 0.07347923177618843,
+        "throughput_img_s": 0.14695846355237685
+      },
+      "failures": []
+    },
+    "max_speed": {
+      "summary": {
+        "num_samples": 1,
+        "avg_total_ms": 13060.06762800098,
+        "p50_total_ms": 13060.06762800098,
+        "p95_total_ms": 13060.06762800098,
+        "p99_total_ms": 13060.06762800098,
+        "throughput_req_s": 0.07656928191213842,
+        "throughput_img_s": 0.15313856382427685
+      },
+      "failures": []
+    }
+  }
+}

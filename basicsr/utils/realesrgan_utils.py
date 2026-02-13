@@ -53,7 +53,7 @@ class RealESRGANer():
         if model_path.startswith('https://'):
             model_path = load_file_from_url(
                 url=model_path, model_dir=os.path.join('weights/realesrgan'), progress=True, file_name=None)
-        loadnet = torch.load(model_path, map_location=torch.device('cpu'))
+        loadnet = torch.load(model_path, map_location=torch.device('cpu'), weights_only=False)
         # prefer to use params_ema
         if 'params_ema' in loadnet:
             keyname = 'params_ema'
@@ -72,6 +72,7 @@ class RealESRGANer():
         self.img = img.unsqueeze(0).to(self.device)
         if self.half:
             self.img = self.img.half()
+        self.img = self.img.to(memory_format=torch.channels_last)
 
         # pre_pad
         if self.pre_pad != 0:
@@ -136,7 +137,7 @@ class RealESRGANer():
 
                 # upscale tile
                 try:
-                    with torch.no_grad():
+                    with torch.inference_mode():
                         output_tile = self.model(input_tile)
                 except RuntimeError as error:
                     print('Error', error)
@@ -170,7 +171,7 @@ class RealESRGANer():
             self.output = self.output[:, :, 0:h - self.pre_pad * self.scale, 0:w - self.pre_pad * self.scale]
         return self.output
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def enhance(self, img, outscale=None, alpha_upsampler='realesrgan'):
         h_input, w_input = img.shape[0:2]
         # img: numpy
@@ -196,7 +197,7 @@ class RealESRGANer():
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         # ------------------- process image (without the alpha channel) ------------------- #
-        with torch.no_grad():
+        with torch.inference_mode():
             self.pre_process(img)
             if self.tile_size > 0:
                 self.tile_process()
@@ -208,7 +209,6 @@ class RealESRGANer():
             if img_mode == 'L':
                 output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2GRAY)
         del output_img_t
-        torch.cuda.empty_cache()        
 
         # ------------------- process the alpha channel if necessary ------------------- #
         if img_mode == 'RGBA':
