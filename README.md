@@ -46,6 +46,29 @@ cog predict \
 Notes:
 - `compile_backend` is initialization-time for a warm predictor process in optimized mode. After optimized runtime is initialized, changing this value in later requests returns a validation error.
 
+## Recommended Production Parameters
+
+For sustained high-load inference (single image per request), use:
+
+- `runtime_profile`: `max_speed`
+- `stability_mode`: `optimized`
+- `compile_backend`: `none`
+- `codeformer_fidelity`: `0.5` (tune for quality preference; usually small speed impact)
+
+Recommended JSON input:
+
+```json
+{
+  "input": {
+    "images": ["https://.../input.jpg"],
+    "runtime_profile": "max_speed",
+    "stability_mode": "optimized",
+    "compile_backend": "none",
+    "codeformer_fidelity": 0.5
+  }
+}
+```
+
 ## Output
 
 Returns a list of restored images corresponding to each input image.
