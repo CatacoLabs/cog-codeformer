@@ -86,10 +86,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=3, help="Warmup rounds")
     parser.add_argument("--repeats", type=int, default=5, help="Measured rounds")
     parser.add_argument("--codeformer-fidelity", type=float, default=0.5)
-    parser.add_argument("--background-enhance", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--face-upsample", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--upscale", type=int, default=2)
-    parser.add_argument("--output-format", default="jpg", choices=["png", "jpg"])
+    parser.add_argument("--stability-mode", default="safe", choices=["safe", "optimized"])
+    parser.add_argument(
+        "--compile-backend",
+        default="none",
+        choices=["none", "eager", "aot_eager", "inductor"],
+    )
     parser.add_argument(
         "--output", default="benchmarks/last_bench_inprocess.json",
         help="Output JSON file",
@@ -105,17 +107,19 @@ def run_benchmark(
 ) -> List[Dict[str, float]]:
     """Process all images once, return list of per-image stats."""
     all_stats = []
+    predictor.runtime_profile = profile
+    predictor.stability_mode = args.stability_mode
+    predictor.compile_backend = args.compile_backend
+    if predictor.stability_mode == "optimized":
+        predictor._ensure_optimized_runtime(compile_backend=args.compile_backend)
+
     for img_path in image_paths:
         import tempfile
         out_dir = Path(tempfile.mkdtemp())
-        out_path = out_dir / f"out.{args.output_format}"
+        out_path = out_dir / "out.jpg"
         predictor._process_single_image(
             image=img_path,
             codeformer_fidelity=args.codeformer_fidelity,
-            background_enhance=args.background_enhance,
-            face_upsample=args.face_upsample,
-            upscale=args.upscale,
-            output_format=args.output_format,
             output_path=out_path,
             runtime_profile=profile,
         )
@@ -149,10 +153,8 @@ def main() -> None:
         "repeats": args.repeats,
         "params": {
             "codeformer_fidelity": args.codeformer_fidelity,
-            "background_enhance": args.background_enhance,
-            "face_upsample": args.face_upsample,
-            "upscale": args.upscale,
-            "output_format": args.output_format,
+            "stability_mode": args.stability_mode,
+            "compile_backend": args.compile_backend,
         },
         "mode": "in_process",
     }

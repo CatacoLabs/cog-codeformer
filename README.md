@@ -17,24 +17,20 @@ The model uses a discrete codebook prior learned from high-quality faces combine
 ### Basic Usage
 
 ```bash
-cog predict -i images=@input.jpg
+cog predict --json '{"images":["data/1.jpg"]}'
 ```
 
 ### Multiple Images (up to 4)
 
 ```bash
-cog predict -i images=@photo1.jpg -i images=@photo2.jpg
+cog predict --json '{"images":["data/1.jpg","data/2.jpg"]}'
 ```
 
 ### With Custom Parameters
 
 ```bash
 cog predict \
-  -i images=@input.jpg \
-  -i codeformer_fidelity=0.7 \
-  -i runtime_profile=fast \
-  -i stability_mode=optimized \
-  -i compile_backend=eager
+  --json '{"images":["data/1.jpg"],"codeformer_fidelity":0.7,"runtime_profile":"fast","stability_mode":"optimized","compile_backend":"eager"}'
 ```
 
 ## Input Parameters
@@ -46,6 +42,9 @@ cog predict \
 | `runtime_profile` | string | "baseline" | Runtime profile: "baseline", "fast", or "max_speed" |
 | `stability_mode` | string | "safe" | Execution mode: "safe" (recommended on Replicate) or "optimized" (highest throughput) |
 | `compile_backend` | string | "eager" | `torch.compile` backend used only when `stability_mode=optimized` |
+
+Notes:
+- `compile_backend` is initialization-time for a warm predictor process in optimized mode. After optimized runtime is initialized, changing this value in later requests returns a validation error.
 
 ## Output
 
@@ -63,13 +62,25 @@ curl http://localhost:8080/predictions -X POST \
 
 ## Benchmarking
 
-Use the benchmark runner to compare runtime profiles via repeated `cog predict` calls:
+Use the benchmark runner to compare runtime profiles via repeated local `cog serve` HTTP calls:
 
 ```bash
 python benchmarks/run_bench.py --image-dir data --batch-size 4 --profiles baseline fast max_speed --repeats 3
 ```
 
-The script auto-discovers `data/*.jpg` when `--images` is not provided and executes batched `cog predict` calls (default 4 images per request to match the predictor limit). It then saves per-profile latency percentiles and throughput.
+The script auto-discovers `data/*.jpg` when `--images` is not provided and executes batched prediction calls (default 4 images per request to match the predictor limit). It then saves per-profile latency percentiles and throughput.
+
+### Single-Image Benchmark
+
+Find the fastest single-image config (cold and warm winners):
+
+```bash
+python benchmarks/bench_single_image.py --image data/1.jpg --warmup 1 --repeats 5
+```
+
+This writes `benchmarks/last_bench_single_image.json` and reports both:
+- `best_warm`: best steady-state latency
+- `best_cold`: best first-request latency
 
 ### Runtime Profiles
 

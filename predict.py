@@ -102,7 +102,14 @@ class Predictor(BasePredictor):
 
     def _ensure_optimized_runtime(self, compile_backend: str = "inductor") -> None:
         if self.optimized_runtime_enabled:
-            self._log("[opt] optimized runtime already enabled")
+            if compile_backend != self.compile_backend:
+                raise ValueError(
+                    "compile_backend cannot be changed after optimized runtime is initialized. "
+                    f"requested={compile_backend}, active={self.compile_backend}"
+                )
+            self._log(
+                f"[opt] optimized runtime already enabled, compile_backend={self.compile_backend}"
+            )
             return
 
         self.compile_backend = compile_backend
@@ -360,12 +367,12 @@ class Predictor(BasePredictor):
 
         self.runtime_profile = runtime_profile
         self.stability_mode = stability_mode
-        self.compile_backend = compile_backend
         self._log(
             f"[predict] runtime_profile={runtime_profile}, stability_mode={stability_mode}, compile_backend={compile_backend}, images={len(images)}"
         )
         if self.stability_mode == "optimized":
             self._ensure_optimized_runtime(compile_backend=compile_backend)
+        self.compile_backend = compile_backend
 
         input_paths: List[FSPath] = []
         for image in images:
