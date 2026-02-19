@@ -65,10 +65,16 @@ curl http://localhost:8080/predictions -X POST \
 Use the benchmark runner to compare runtime profiles via repeated local `cog serve` HTTP calls:
 
 ```bash
-python benchmarks/run_bench.py --image-dir data --batch-size 4 --profiles baseline fast max_speed --repeats 3
+python benchmarks/run_bench.py --image-dir data --batch-size 1 --profiles max_speed --stability-mode optimized --compile-backend none --warmup 1 --repeats 3 --port 6301
 ```
 
-The script auto-discovers `data/*.jpg` when `--images` is not provided and executes batched prediction calls (default 4 images per request to match the predictor limit). It then saves per-profile latency percentiles and throughput.
+The script auto-discovers `data/*.jpg` when `--images` is not provided and executes prediction calls through a local `cog serve` instance. It now reports:
+- `round_totals`: repeat-level totals (one sample per repeat)
+- `per_request`: request-level latency distribution (p50/p95/p99)
+- `per_image`: image-level latency distribution (same as request-level when `--batch-size 1`)
+
+Important:
+- Use a free `--port` each run. The benchmark now fails fast if the port is already in use to avoid stale-server contamination.
 
 ### Single-Image Benchmark
 
@@ -95,26 +101,24 @@ This writes `benchmarks/last_bench_single_image.json` and reports both:
 
 ### Optimization Results (Current)
 
-Measured with `data/1.jpg` and `data/2.jpg`, `warmup=1`, `repeats=3`:
+Measured on all `data/*.jpg` (100 images), `batch_size=1`, `runtime_profile=max_speed`, `stability_mode=optimized`, `warmup=1`, `repeats=3`, request-level stats:
 
-| Profile | Avg Latency (ms) | P95 (ms) | Throughput (img/s) | Delta vs Baseline |
-|---------|------------------:|---------:|-------------------:|------------------:|
-| `baseline` | 13425.92 | 13559.31 | 0.14897 | - |
-| `fast` | 13250.94 | 13430.49 | 0.15093 | +1.30% |
-| `max_speed` | 12985.76 | 13080.51 | 0.15401 | +3.28% |
+| compile_backend | Avg / request (ms) | p50 (ms) | p95 (ms) | p99 (ms) | Throughput (img/s) |
+|----------------|-------------------:|---------:|---------:|---------:|-------------------:|
+| `none` | 126.04 | 122.69 | 146.76 | 151.77 | 7.93 |
+| `eager` | 135.26 | 132.34 | 153.41 | 158.25 | 7.39 |
 
 Main takeaways:
-- End-to-end speedup is real but modest in `cog predict` mode.
-- Biggest gains came from face batching and mixed precision.
-- `max_speed` is currently the fastest profile.
-- `fast` is a middle-ground profile when you want speedups with more conservative quality behavior.
+- For sustained load in this implementation, `compile_backend=none` outperformed `eager` on avg, p50, and p95.
+- Recommended sustained-load settings: `runtime_profile=max_speed`, `stability_mode=optimized`, `compile_backend=none`.
+- Replicate wall-clock can be higher than model stage totals (platform/network overhead). Stage logs around `~160ms` can still correspond to `~0.3s` end-to-end requests.
 
 ### Full Dataset Benchmark (100 images)
 
-Run all images in `data/` (auto-discovered) with request chunking:
+Run all images in `data/` (auto-discovered) with single-image request latency tracking:
 
 ```bash
-python benchmarks/run_bench.py --image-dir data --batch-size 4 --profiles baseline fast max_speed --warmup 1 --repeats 3 --output benchmarks/last_bench_100.json
+python benchmarks/run_bench.py --image-dir data --batch-size 1 --profiles max_speed --stability-mode optimized --compile-backend none --warmup 1 --repeats 3 --port 6301 --output benchmarks/last_bench_100.json
 ```
 
 ## Model Weights
